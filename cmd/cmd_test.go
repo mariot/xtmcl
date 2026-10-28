@@ -156,6 +156,10 @@ func TestComposerConfig(t *testing.T) {
 		Manager struct {
 			ID                     string `yaml:"id"`
 			CredentialsKeyFilepath string `yaml:"credentials_key_filepath"`
+			Logger                 struct {
+				Directory bool `yaml:"directory"`
+				Console   bool `yaml:"console"`
+			} `yaml:"logger"`
 		} `yaml:"manager"`
 		OpenCTI struct {
 			Enable bool `yaml:"enable"`
@@ -176,6 +180,10 @@ func TestComposerConfig(t *testing.T) {
 	}
 	if config.Manager.ID != e.ManagerID || config.Manager.CredentialsKeyFilepath != composerKeyPath {
 		t.Errorf("manager: %+v", config.Manager)
+	}
+	// Composer swaps the two logger switches: both on keeps its logs on the console
+	if !config.Manager.Logger.Directory || !config.Manager.Logger.Console {
+		t.Errorf("logger: %+v", config.Manager.Logger)
 	}
 	if config.OpenCTI.Enable || !config.OpenAEV.Enable || config.OpenAEV.URL != "http://192.168.5.2:47380" ||
 		config.OpenAEV.Token != "composer-token" {
@@ -344,6 +352,40 @@ func TestUpFlagsOverrideOnlyWhatTheyChange(t *testing.T) {
 	}
 	if err := applyUpFlags(newUpCommand(t, "--orchestrator", "swarm"), e); err == nil {
 		t.Fatal("unknown orchestrator accepted")
+	}
+}
+
+func TestUpComposerEnv(t *testing.T) {
+	e := testEnvironment(t)
+	if err := applyUpFlags(newUpCommand(t, "--composer-env", "A=1", "--composer-env", " B = x=y"), e); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(e.ComposerEnv, " ") != "A=1 B= x=y" {
+		t.Fatalf("composer env: %q", e.ComposerEnv)
+	}
+	if err := applyUpFlags(newUpCommand(t), e); err != nil || len(e.ComposerEnv) != 2 {
+		t.Fatalf("remembered composer env lost: %q %v", e.ComposerEnv, err)
+	}
+	if err := applyUpFlags(newUpCommand(t, "--composer-env", "C=3"), e); err != nil || strings.Join(e.ComposerEnv, " ") != "C=3" {
+		t.Fatalf("composer env not replaced: %q %v", e.ComposerEnv, err)
+	}
+	if err := applyUpFlags(newUpCommand(t, "--composer-env", "NOVALUE"), e); err == nil {
+		t.Fatal("composer env without = accepted")
+	}
+	if err := applyUpFlags(newUpCommand(t, "--composer-env", "none"), e); err != nil || e.ComposerEnv != nil {
+		t.Fatalf("composer env not unset: %q %v", e.ComposerEnv, err)
+	}
+
+	f := stubRunner(t)
+	if err := platform.GenerateKey(e.path(keyFile)); err != nil {
+		t.Fatal(err)
+	}
+	e.ComposerEnv = []string{"OPENAEV__NO_PROXY=platform,10.0.0.0/8"}
+	if err := startComposer(e, nil); err != nil {
+		t.Fatal(err)
+	}
+	if create := f.called("docker create")[0]; !strings.Contains(create, "-e OPENAEV__NO_PROXY=platform,10.0.0.0/8 "+e.ComposerImage) {
+		t.Errorf("composer env not passed before the image: %s", create)
 	}
 }
 

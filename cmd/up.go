@@ -37,6 +37,7 @@ var upOpts struct {
 	network      string
 	kindCluster  string
 	kubeconfig   string
+	composerEnv  []string
 	pull         bool
 	timeout      time.Duration
 }
@@ -52,7 +53,8 @@ Settings are remembered: the next up reuses them unless a flag changes them.
   xtmcl up
   xtmcl up --image filigran/xtm-composer:3.261021.1
   xtmcl up --orchestrator kubernetes          # on a local kind cluster
-  xtmcl up --upstream http://localhost:5001   # e.g. Mimikyu or a real OpenAEV`,
+  xtmcl up --upstream http://localhost:5001   # e.g. Mimikyu or a real OpenAEV
+  xtmcl up --composer-env OPENAEV__WITH_PROXY=true --composer-env OPENAEV__HTTP_PROXY=http://proxy:3128`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		e, err := initEnvironment()
@@ -82,6 +84,7 @@ func addUpFlags(cmd *cobra.Command) {
 	f.StringVar(&upOpts.network, "network", "", "Docker network to attach the connectors to (\"none\" to unset)")
 	f.StringVar(&upOpts.kindCluster, "kind-cluster", "", "kind cluster for --orchestrator kubernetes, created if missing (default "+defaultKindCluster+")")
 	f.StringVar(&upOpts.kubeconfig, "kubeconfig", "", "kubeconfig of another cluster, instead of kind (must be reachable from a container)")
+	f.StringArrayVar(&upOpts.composerEnv, "composer-env", nil, "environment variable KEY=VALUE for the Composer, e.g. OPENAEV__NO_PROXY=... (repeatable, replaces the remembered ones; \"none\" to unset)")
 	f.BoolVar(&upOpts.pull, "pull", false, "pull the Composer image before starting it")
 	f.DurationVar(&upOpts.timeout, "timeout", 90*time.Second, "how long to wait for the Composer to register")
 }
@@ -121,6 +124,13 @@ func applyUpFlags(cmd *cobra.Command, e *environment) error {
 		e.KindCluster = upOpts.kindCluster
 		e.Kubeconfig = ""
 	}
+	if f.Changed("composer-env") {
+		env, err := composerEnv(upOpts.composerEnv)
+		if err != nil {
+			return err
+		}
+		e.ComposerEnv = env
+	}
 	if e.Orchestrator == orchestratorKubernetes && e.Kubeconfig == "" && e.KindCluster == "" {
 		e.KindCluster = defaultKindCluster
 	}
@@ -128,6 +138,22 @@ func applyUpFlags(cmd *cobra.Command, e *environment) error {
 		e.KindCluster, e.Kubeconfig = "", ""
 	}
 	return nil
+}
+
+// composerEnv validates --composer-env values; "none" alone unsets them.
+func composerEnv(values []string) ([]string, error) {
+	if len(values) == 1 && values[0] == "none" {
+		return nil, nil
+	}
+	env := make([]string, 0, len(values))
+	for _, raw := range values {
+		key, value, ok := parseAssignment(raw)
+		if !ok {
+			return nil, fmt.Errorf("invalid --composer-env %q: use KEY=VALUE", raw)
+		}
+		env = append(env, key+"="+value)
+	}
+	return env, nil
 }
 
 func up(e *environment) error {
@@ -281,7 +307,9 @@ func composerConfig(e *environment) ([]byte, error) {
 			"ping_alive_schedule":      10,
 			"credentials_key_filepath": composerKeyPath,
 			"logger": map[string]any{
-				"level": "info", "format": "json", "directory": false, "console": true,
+				// Composer's init_logger swaps the two: directory enables the console
+				// and console the file. Both on keeps docker logs working either way.
+				"level": "info", "format": "json", "directory": true, "console": true,
 			},
 		},
 		"opencti": map[string]any{"enable": false},
@@ -321,6 +349,9 @@ func startComposer(e *environment, kubeconfig []byte) error {
 		if e.KindCluster != "" {
 			args = append(args, "--network", kindNetwork)
 		}
+	}
+	for _, kv := range e.ComposerEnv {
+		args = append(args, "-e", kv)
 	}
 	args = append(args, e.ComposerImage)
 	if _, err := runCommand("docker", args...); err != nil {

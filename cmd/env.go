@@ -31,6 +31,9 @@ type environment struct {
 	Network       string `json:"network,omitempty"`
 	KindCluster   string `json:"kind_cluster,omitempty"`
 	Kubeconfig    string `json:"kubeconfig,omitempty"`
+	// ComposerEnv is extra KEY=VALUE environment for the Composer container,
+	// e.g. OPENAEV__HTTP_PROXY; it overrides the generated configuration.
+	ComposerEnv []string `json:"composer_env,omitempty"`
 
 	dir string
 }

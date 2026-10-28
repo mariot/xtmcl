@@ -143,6 +143,52 @@ COMPOSER_IMAGE=xtm-composer:dev ./scripts/e2e.sh
 
 To go back to the released Composer, run `xtmcl up --image filigran/xtm-composer:latest --pull`.
 
+### Compare master and a branch
+
+The `filigran/xtm-composer:rolling` image is rebuilt on every push to master. Pass `--pull` so Docker doesn't reuse
+an old copy:
+
+```bash
+# master
+xtmcl up --image filigran/xtm-composer:rolling --pull
+xtmcl deploy nginx:alpine --name "Web Demo" --secret API_TOKEN=s3cr3t
+xtmcl ps; xtmcl composer-logs > master.log
+xtmcl down          # removes the deployments, keeps the declared connectors
+
+# your branch, built in its checkout: the same connectors, deployed from scratch
+xtmcl up --image xtm-composer:my-branch
+xtmcl ps; xtmcl composer-logs > branch.log
+```
+
+Run `xtmcl down` between the two. Otherwise the second Composer takes over the containers the first one deployed,
+because both have the same manager ID.
+
+To run both at once, give each its own environment and port:
+
+```bash
+XTMCL_HOME=~/xtmcl-master xtmcl up --image filigran/xtm-composer:rolling --pull
+XTMCL_HOME=~/xtmcl-branch xtmcl up --image xtm-composer:my-branch --port 47381
+```
+
+On one Docker daemon, connectors must then have different names in the two environments, because Composer names
+each container after its connector.
+
+### Configure Composer itself
+
+`--composer-env KEY=VALUE` passes environment variables to Composer. Composer reads them after its configuration
+file, so they override what xtmcl generates. For example, to run Composer behind a proxy:
+
+```bash
+xtmcl up --composer-env OPENAEV__WITH_PROXY=true \
+  --composer-env OPENAEV__HTTP_PROXY=http://proxy.example.com:3128 \
+  --composer-env OPENAEV__HTTPS_PROXY=http://proxy.example.com:3128 \
+  --composer-env OPENAEV__NO_PROXY=localhost,host.docker.internal
+```
+
+Like the other `up` settings, they're remembered. A new `--composer-env` replaces the whole list, and
+`--composer-env none` removes it. The values are stored in clear in `env.json`, so don't put production secrets in
+them.
+
 ### Run a real collector against Mimikyu
 
 ```bash
@@ -213,6 +259,7 @@ Run `xtmcl <command> --help` for the details of each command.
 |---|---|---|
 | `--image` | `filigran/xtm-composer:latest` | Composer image. |
 | `--pull` | | Pull the Composer image before starting it. |
+| `--composer-env` | | Environment variable `KEY=VALUE` for Composer, overriding its generated configuration. Repeatable. `none` unsets it. See [Configure Composer itself](#configure-composer-itself). |
 | `--orchestrator` | `docker` | Where Composer deploys connectors: `docker` or `kubernetes`. |
 | `--kind-cluster` | `xtm-composer` | kind cluster for Kubernetes, created if missing. |
 | `--kubeconfig` | | Kubeconfig of another cluster, used instead of kind. A container must be able to reach its API server. |
